@@ -1,0 +1,23 @@
+{
+  "name": "darq-credit-protocol-v2",
+  "version": "2.0.0",
+  "description": "DARQ Credit Protocol v2 - Facilitator Architecture: P2P credit lending on XRPL with forced repayment via Checks",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "demo:repay": "node src/demo.js repay",
+    "demo:liquidate": "node src/demo.js liquidate",
+    "init": "node src/index.js init",
+    "deposit": "node src/index.js deposit",
+    "borrow": "node src/index.js borrow",
+    "repay": "node src/index.js repay",
+    "liquidate": "node src/index.js liquidate"
+  },
+  "dependencies": {
+    "five-bells-condition": "^5.0.1",
+    "xrpl": "^4.2.0"
+  },
+  "keywords": ["xrpl", "defi", "lending", "credit", "darq", "p2p", "checks"],
+  "author": "DARQ Labs",
+  "license": "MIT"
+}
