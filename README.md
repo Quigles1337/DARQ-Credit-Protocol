@@ -386,4 +386,6 @@ Both lifecycle modes verified on XRPL Testnet (`wss://s.altnet.rippletest.net:51
 
 ## License
 
-MIT
+Copyright (c) 2026 DARQ Labs. All rights reserved.
+
+This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software, in whole or in part, is strictly prohibited without prior written permission from DARQ Labs.
