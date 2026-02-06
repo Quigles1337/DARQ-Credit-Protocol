@@ -35,14 +35,6 @@ async function getLedgerTime(client) {
   return ledger.result.ledger.close_time // Already in Ripple epoch
 }
 
-// Get oracle-safe LastUpdateTime (must be within 300s of parent ledger close)
-async function getOracleTime(client) {
-  const ledger = await client.request({ command: 'ledger', ledger_index: 'current' })
-  // Use parent close time (current ledger's close_time_human may not exist)
-  // Fall back to wall clock in Ripple epoch
-  return Math.floor(Date.now() / 1000) - RIPPLE_EPOCH_OFFSET
-}
-
 // Ripple time N seconds from now using ledger time
 async function rippleTimeFromNow(client, seconds) {
   const ledgerTime = await getLedgerTime(client)
@@ -66,7 +58,6 @@ function resetTxCount() { txCount = 0 }
 module.exports = {
   submitTx,
   getLedgerTime,
-  getOracleTime,
   rippleTimeFromNow,
   waitForRippleTime,
   getTxCount,

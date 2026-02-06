@@ -2,20 +2,23 @@
 
 const xrpl = require('xrpl')
 const { CURRENCIES, LOAN_PARAMS } = require('../config')
-const { submitTx, getLedgerTime, getOracleTime, waitForRippleTime } = require('../utils/tx')
+const { submitTx, getLedgerTime } = require('../utils/tx')
 const { getXRPBalance, getTokenBalance, getNFTs } = require('../utils/state')
+const { getLPTokenBalance } = require('../utils/amm')
 
 // ═══════════════════════════════════════════════════════════════
-//  FLOW 4: repayLoan() — ~15 transactions
-//  Happy path: Lenders force-pull repayment via Checks,
-//  then collateral is released back to Borrower.
+//  FLOW 4: repayLoan() — ~20 transactions
+//  Happy path: RLUSD Checks cashed, LP tokens returned to
+//  overlenders via vault standing offer crossing.
 // ═══════════════════════════════════════════════════════════════
 
 async function repayLoan(client, accounts, loanDetails) {
+  const ammInfo = loanDetails.ammInfo
+
   console.log('')
   console.log('\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557')
-  console.log('\u2551        FLOW 4: REPAY LOAN \u2014 FORCED COLLECTION VIA CHECKS          \u2551')
-  console.log('\u2551        Lenders pull repayment. Borrower cooperation: NONE          \u2551')
+  console.log('\u2551   FLOW 4: REPAY LOAN \u2014 FORCED COLLECTION + LP TOKEN RETURN         \u2551')
+  console.log('\u2551   RLUSD Checks cashed. LP tokens returned via vault offer.         \u2551')
   console.log('\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D')
   console.log('')
 
@@ -33,25 +36,17 @@ async function repayLoan(client, accounts, loanDetails) {
     }
   }, `Borrower: Return ${loanDetails.loanAmount} dCREDIT to Protocol Issuer`)
 
-  // Verify dCREDIT balance is now 0
   const remainingDebt = await getTokenBalance(
     client, accounts.borrower.classicAddress, CURRENCIES.dCREDIT, accounts.protocolIssuer.classicAddress
   )
   console.log(`  \u2514\u2500 Borrower dCREDIT balance: ${remainingDebt} (should be 0)`)
   console.log('')
 
-  // ─── Step 2: Wait for maturity ───
-  console.log('  Step 2: Waiting for loan maturity window...')
-  // For check cashing we don't need to wait for maturity, checks can be cashed anytime before expiry
-  // But we demonstrate the concept
-  console.log('  \u2514\u2500 Checks can be cashed immediately (no maturity lock on Checks)')
-  console.log('')
-
-  // ─── Step 3: Lenders force-pull repayment via Checks ───
-  console.log('  Step 3: FORCED REPAYMENT \u2014 Lenders Cash Checks')
+  // ─── Step 2: Lenders cash RLUSD Checks (forced collection) ───
+  console.log('  Step 2: FORCED REPAYMENT \u2014 Lenders Cash RLUSD Checks')
   console.log('')
   console.log('  \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557')
-  console.log('  \u2551       FORCED CHECK COLLECTION (NO BORROWER COOPERATION)         \u2551')
+  console.log('  \u2551   FORCED RLUSD CHECK COLLECTION (NO BORROWER COOPERATION)       \u2551')
   console.log('  \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D')
   console.log('')
 
@@ -59,7 +54,7 @@ async function repayLoan(client, accounts, loanDetails) {
 
   for (const alloc of loanDetails.allocations) {
     if (!alloc.checkId) {
-      console.log(`  [\u2717] ${alloc.lender} Lender: No CheckID found \u2014 skipped`)
+      console.log(`  [\u2717] ${alloc.name}: No CheckID found \u2014 skipped`)
       continue
     }
 
@@ -67,8 +62,12 @@ async function repayLoan(client, accounts, loanDetails) {
       TransactionType: 'CheckCash',
       Account: alloc.wallet.classicAddress,
       CheckID: alloc.checkId,
-      Amount: xrpl.xrpToDrops(String(alloc.totalOwed))
-    }, `${alloc.lender} Lender: CheckCash ${alloc.totalOwed} XRP (${alloc.allocated} principal + ${alloc.interest} interest)`)
+      Amount: {
+        currency: CURRENCIES.RLUSD,
+        issuer: accounts.rlusdIssuer.classicAddress,
+        value: String(alloc.totalOwed)
+      }
+    }, `${alloc.name}: CheckCash ${alloc.totalOwed} RLUSD (${alloc.type === 'underlender' ? alloc.principal + ' principal + ' + alloc.interest + ' interest' : alloc.interest + ' interest'})`)
 
     if (result.result && result.result.meta && result.result.meta.TransactionResult === 'tesSUCCESS') {
       totalCollected += alloc.totalOwed
@@ -76,30 +75,53 @@ async function repayLoan(client, accounts, loanDetails) {
   }
 
   console.log('')
-  console.log(`  Total Collected: ${totalCollected.toFixed(6)} XRP`)
+  console.log(`  Total Collected: ${totalCollected.toFixed(6)} RLUSD`)
   console.log('  All Checks: tesSUCCESS')
-  console.log('  Borrower cooperation required: NONE')
   console.log('')
 
-  // ─── Step 4: Release collateral ───
-  console.log('  Step 4: Release Collateral (Reveal Hash Preimage)')
-
-  console.log('  Waiting for escrow maturity...')
-  await waitForRippleTime(client, loanDetails.maturityTime)
-
-  await submitTx(client, accounts.borrower, {
-    TransactionType: 'EscrowFinish',
-    Account: accounts.borrower.classicAddress,
-    Owner: loanDetails.vaultAddress,
-    OfferSequence: loanDetails.collateralEscrowSeq,
-    Condition: loanDetails.conditionHex,
-    Fulfillment: loanDetails.fulfillmentHex
-  }, 'Borrower: EscrowFinish \u2014 Release hash-locked collateral from blackholed vault')
-
+  // ─── Step 3: Return LP tokens to overlenders ───
+  console.log('  Step 3: Return LP Tokens to Overlenders')
+  console.log('  (Originator crosses vault standing offer via dCREDIT)')
   console.log('')
 
-  // ─── Step 5: Credit score bonus ───
-  console.log('  Step 5: Credit Score Bonus')
+  // Originator crosses vault's standing offer directly — as dCREDIT issuer,
+  // the OfferCreate creates dCREDIT on the fly to match the vault's offer
+  const lpAmount = loanDetails.lpCollateral
+  await submitTx(client, accounts.protocolIssuer, {
+    TransactionType: 'OfferCreate',
+    Account: accounts.protocolIssuer.classicAddress,
+    TakerPays: {
+      currency: ammInfo.lpTokenCurrency,
+      issuer: ammInfo.lpTokenIssuer,
+      value: lpAmount
+    },
+    TakerGets: {
+      currency: CURRENCIES.dCREDIT,
+      issuer: accounts.protocolIssuer.classicAddress,
+      value: lpAmount
+    },
+    Flags: 0x00020000 // tfImmediateOrCancel
+  }, 'Originator: Cross vault offer (dCREDIT \u2192 LP tokens)')
+
+  // Distribute LP tokens back to each overlender
+  const overlenderAllocs = loanDetails.allocations.filter(a => a.type === 'overlender')
+  for (const alloc of overlenderAllocs) {
+    const lpReturn = alloc.lpTokenAmount
+    await submitTx(client, accounts.protocolIssuer, {
+      TransactionType: 'Payment',
+      Account: accounts.protocolIssuer.classicAddress,
+      Destination: alloc.wallet.classicAddress,
+      Amount: {
+        currency: ammInfo.lpTokenCurrency,
+        issuer: ammInfo.lpTokenIssuer,
+        value: lpReturn
+      }
+    }, `Originator: Return ${lpReturn} LP tokens \u2192 ${alloc.name}`)
+  }
+  console.log('')
+
+  // ─── Step 4: Credit score bonus ───
+  console.log('  Step 4: Credit Score Bonus')
 
   await submitTx(client, accounts.protocolIssuer, {
     TransactionType: 'Payment',
@@ -111,15 +133,15 @@ async function repayLoan(client, accounts, loanDetails) {
       value: String(LOAN_PARAMS.REPAY_SCORE_BONUS)
     }
   }, `Protocol: +${LOAN_PARAMS.REPAY_SCORE_BONUS} dSCORE to Borrower (on-time repayment)`)
-
   console.log('')
 
-  // ─── Step 6: Repayment NFT ───
-  console.log('  Step 6: Repayment Record NFT')
+  // ─── Step 5: Repayment NFT ───
+  console.log('  Step 5: Repayment Record NFT')
 
   const repayURI = Buffer.from(JSON.stringify({
     type: 'REPAYMENT_RECORD',
     loan: loanDetails.loanAmount,
+    denomination: 'RLUSD',
     totalRepaid: totalCollected,
     rate: `${(loanDetails.weightedRate * 100).toFixed(2)}%`,
     status: 'REPAID'
@@ -189,34 +211,9 @@ async function repayLoan(client, accounts, loanDetails) {
   }
   console.log('')
 
-  // ─── Step 7: Oracle update ───
-  console.log('  Step 7: Oracle Update')
+  // ─── Step 6: Final state ───
+  console.log('  Step 6: Final State')
 
-  const oracleTime = await getOracleTime(client)
-  await submitTx(client, accounts.oracleCommittee, {
-    TransactionType: 'OracleSet',
-    Account: accounts.oracleCommittee.classicAddress,
-    OracleDocumentID: 2,
-    Provider: Buffer.from('DARQ-Oracle').toString('hex'),
-    AssetClass: Buffer.from('utilization').toString('hex'),
-    LastUpdateTime: oracleTime,
-    PriceDataSeries: [
-      {
-        PriceData: {
-          BaseAsset: 'XRP',
-          QuoteAsset: 'USD',
-          AssetPrice: '1',
-          Scale: 3
-        }
-      }
-    ]
-  }, 'Oracle: Utilization = 0% (loan repaid)')
-  console.log('')
-
-  // ─── Step 8: Final state logging ───
-  console.log('  Step 8: Final State')
-
-  const borrowerBalance = await getXRPBalance(client, accounts.borrower.classicAddress)
   const borrowerScore = await getTokenBalance(
     client, accounts.borrower.classicAddress, CURRENCIES.dSCORE, accounts.protocolIssuer.classicAddress
   )
@@ -225,16 +222,24 @@ async function repayLoan(client, accounts, loanDetails) {
   console.log('  \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557')
   console.log('  \u2551              REPAYMENT COMPLETE \u2014 ALL CLEAR                     \u2551')
   console.log('  \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D')
-  console.log(`  Borrower XRP Balance: ${borrowerBalance} XRP`)
   console.log(`  Borrower dSCORE:      ${borrowerScore}`)
   console.log(`  Debt Cleared:         ${loanDetails.loanAmount} dCREDIT returned`)
-  console.log(`  Collateral Released:  Hash preimage revealed`)
-  console.log(`  Forced Collection:    All ${loanDetails.allocations.length} Checks cashed`)
+  console.log(`  LP Tokens:            Returned to overlenders`)
+  console.log(`  RLUSD Collected:      ${totalCollected.toFixed(6)} RLUSD via forced Checks`)
   console.log('')
 
   for (const alloc of loanDetails.allocations) {
-    const lenderBalance = await getXRPBalance(client, alloc.wallet.classicAddress)
-    console.log(`  ${alloc.lender.padEnd(16)} Lender: ${lenderBalance} XRP`)
+    if (alloc.type === 'overlender') {
+      const lpBal = await getLPTokenBalance(
+        client, alloc.wallet.classicAddress, ammInfo.lpTokenCurrency, ammInfo.lpTokenIssuer
+      )
+      console.log(`  ${alloc.name.padEnd(18)} LP tokens: ${lpBal} | Interest received: ${alloc.interest} RLUSD`)
+    } else {
+      const rlusdBal = await getTokenBalance(
+        client, alloc.wallet.classicAddress, CURRENCIES.RLUSD, accounts.rlusdIssuer.classicAddress
+      )
+      console.log(`  ${alloc.name.padEnd(18)} RLUSD: ${rlusdBal} | Repaid: ${alloc.totalOwed} RLUSD`)
+    }
   }
   console.log('')
 }

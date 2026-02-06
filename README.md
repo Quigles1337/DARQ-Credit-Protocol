@@ -1,16 +1,16 @@
-# DARQ Credit Protocol v2
+# DARQ Credit Protocol v3
 
-**Facilitator Architecture — P2P Credit Lending on XRPL**
+**AMM-Backed Overlender Architecture — P2P Credit Lending on XRPL**
 
-A peer-to-peer credit lending marketplace built entirely from native XRPL transaction primitives. The protocol matches borrowers with lenders, orchestrates transaction flows, and monitors for defaults — but never holds or intermediates capital. All funds flow directly between participants.
+A peer-to-peer credit lending marketplace built entirely from native XRPL transaction primitives. The Originator (Protocol Issuer) matches borrowers with lenders, orchestrates transaction flows, and handles default recovery — but never intermediates capital. All funds flow directly between participants via RLUSD Checks.
 
 ```
                     ┌─────────────────────────┐
                     │   DARQ Credit Protocol   │
                     │                         │
-                    │   Holds: ZERO capital    │
-                    │   Role:  Matchmaker      │
-                    │   Risk:  Non-custodial   │
+                    │   Denomination: RLUSD    │
+                    │   Role:  Originator      │
+                    │   Accounts: 7            │
                     └─────────────────────────┘
 ```
 
@@ -20,54 +20,54 @@ A peer-to-peer credit lending marketplace built entirely from native XRPL transa
 
 ```mermaid
 graph TB
-    subgraph PROTOCOL["DARQ Protocol (Facilitator)"]
-        PI[Protocol Issuer<br/><i>Issues dCREDIT, dRECEIPT, dSCORE</i>]
-        LE[Liquidation Engine<br/><i>Seizes collateral on default</i>]
-        TR[Treasury<br/><i>Collects fees & bonuses</i>]
-        OR[Oracle Committee<br/><i>Price & utilization feeds</i>]
+    subgraph PROTOCOL["DARQ Protocol (Originator)"]
+        PI[Protocol Issuer<br/><i>Issues dCREDIT, dRECEIPT, dSCORE<br/>Crosses vault offers, distributes LP tokens</i>]
     end
 
-    subgraph LENDERS["Three-Tier Lending Pools"]
-        LC[Conservative Lender<br/><b>3% APR</b> — 20 XRP]
-        LB[Balanced Lender<br/><b>5% APR</b> — 30 XRP]
-        LA[Aggressive Lender<br/><b>8% APR</b> — 15 XRP]
+    subgraph AMM_POOL["XRP/RLUSD AMM"]
+        AMM[AMM Account<br/><i>Bootstrapped by ammBootstrapper</i>]
+    end
+
+    subgraph LENDERS["Two-Tier Lending"]
+        OL1[Overlender 1<br/><b>3% APR</b> — LP collateral]
+        OL2[Overlender 2<br/><b>3% APR</b> — LP collateral]
+        UL1[Underlender 1<br/><b>6% APR</b> — Direct RLUSD]
     end
 
     subgraph BORROWER_SIDE["Borrower"]
-        BW[Borrower Account<br/><i>Receives loan, posts collateral</i>]
+        BW[Borrower Account<br/><i>Receives RLUSD loan</i>]
     end
 
     subgraph VAULT["Blackholed Vault (Per-Loan)"]
-        CV[Collateral Vault<br/><i>Permanently immutable</i>]
-        HE[Hash-Locked Escrow<br/><i>60% collateral return</i>]
+        CV[LP Token Vault<br/><i>Permanently immutable</i>]
         LT[Liquidation Trigger<br/><i>Time-locked escrow</i>]
-        SO[Standing DEX Offer<br/><i>Liquidation price</i>]
+        SO[Standing DEX Offer<br/><i>LP tokens for dCREDIT</i>]
     end
 
-    LC -->|"Direct XRP"| BW
-    LB -->|"Direct XRP"| BW
-    LA -->|"Direct XRP"| BW
+    RLUSD_ISS[RLUSD Issuer<br/><i>Stablecoin issuer</i>]
 
-    BW -->|"CheckCreate"| LC
-    BW -->|"CheckCreate"| LB
-    BW -->|"CheckCreate"| LA
+    OL1 -->|"LP tokens"| PI
+    OL2 -->|"LP tokens"| PI
+    UL1 -->|"Direct RLUSD"| BW
 
-    BW -->|"Collateral XRP"| CV
-    CV --- HE
+    BW -->|"CheckCreate RLUSD"| OL1
+    BW -->|"CheckCreate RLUSD"| OL2
+    BW -->|"CheckCreate RLUSD"| UL1
+
+    PI -->|"LP tokens"| CV
     CV --- LT
     CV --- SO
 
     PI -.->|"dCREDIT"| BW
-    PI -.->|"dRECEIPT"| LC
-    PI -.->|"dRECEIPT"| LB
-    PI -.->|"dRECEIPT"| LA
     PI -.->|"dSCORE"| BW
+    PI -.->|"seizure via dCREDIT"| CV
 
-    HE -->|"On repay"| BW
-    LT -->|"On default"| LE
-    SO -->|"On default"| LE
+    RLUSD_ISS -.->|"issues RLUSD"| OL1
+    RLUSD_ISS -.->|"issues RLUSD"| OL2
+    RLUSD_ISS -.->|"issues RLUSD"| UL1
 
     style PROTOCOL fill:#1a1a2e,stroke:#e94560,color:#fff
+    style AMM_POOL fill:#0f3460,stroke:#533483,color:#fff
     style LENDERS fill:#16213e,stroke:#0f3460,color:#fff
     style BORROWER_SIDE fill:#1a1a2e,stroke:#e94560,color:#fff
     style VAULT fill:#0f3460,stroke:#533483,color:#fff
@@ -78,77 +78,41 @@ graph TB
 
 ## Financial Engineering
 
-### The Core Mechanism: CheckCreate/CheckCash
+### The Core Mechanism: CheckCreate/CheckCash (RLUSD)
 
-XRPL Checks are pre-authorized payment pulls. The borrower signs a `CheckCreate` at loan origination, granting each lender the right to pull their proportional repayment at any time. The borrower does not participate in the collection — the lender calls `CheckCash` unilaterally.
+XRPL Checks are pre-authorized payment pulls. The borrower signs a `CheckCreate` at loan origination, granting each lender the right to pull their proportional RLUSD repayment at any time. The borrower does not participate in the collection — the lender calls `CheckCash` unilaterally.
 
 This inverts the trust model: instead of trusting borrowers to repay voluntarily, lenders hold an irrevocable authorization to collect.
 
-```mermaid
-sequenceDiagram
-    participant B as Borrower
-    participant L1 as Conservative<br/>Lender (3%)
-    participant L2 as Balanced<br/>Lender (5%)
-    participant L3 as Aggressive<br/>Lender (8%)
-    participant P as Protocol<br/>Issuer
+### Two-Tier Lending: Overlender + Underlender
 
-    Note over B,P: ORIGINATION
+Loans are backed by two tiers of capital:
 
-    L1->>B: 13.85 XRP (direct transfer)
-    L2->>B: 20.77 XRP (direct transfer)
-    L3->>B: 10.38 XRP (direct transfer)
-
-    Note over B: Total received: 45 XRP
-
-    B->>L1: CheckCreate (13.86 XRP)
-    B->>L2: CheckCreate (20.78 XRP)
-    B->>L3: CheckCreate (10.39 XRP)
-
-    P->>B: 45 dCREDIT (debt token)
-
-    Note over B,P: MATURITY — FORCED COLLECTION
-
-    B->>P: Return 45 dCREDIT (debt cleared)
-
-    Note over L1,L3: Lenders act independently.<br/>Borrower does NOT participate.
-
-    L1->>L1: CheckCash 13.86 XRP ✓
-    L2->>L2: CheckCash 20.78 XRP ✓
-    L3->>L3: CheckCash 10.39 XRP ✓
-
-    Note over L1,L3: Total collected: 45.03 XRP<br/>Borrower cooperation: NONE
-```
-
-### Three-Tier Weighted Average Pricing
-
-Loans are filled pro-rata across three risk-tiered pools. Each lender contributes proportionally to their available balance, producing a blended interest rate:
+- **Overlenders** deposit XRP + RLUSD into the AMM, receive LP tokens. These LP tokens serve as collateral locked in a blackholed vault.
+- **Underlenders** provide direct RLUSD capital that flows to the borrower.
 
 ```
 Weighted Rate = Σ(Lender_Amount × Lender_Rate) / Total_Loan
 
-Example — 45 XRP loan:
-  Conservative: 13.85 XRP × 3.0% = 0.4155
-  Balanced:     20.77 XRP × 5.0% = 1.0385
-  Aggressive:   10.38 XRP × 8.0% = 0.8304
-                                    ──────
-  Weighted Rate = 2.2844 / 45 = 5.08% blended APR
+Example — 50 RLUSD loan:
+  Overlender 1:   12.50 RLUSD backing × 3.0% = 0.375
+  Overlender 2:   12.50 RLUSD backing × 3.0% = 0.375
+  Underlender 1:  25.00 RLUSD capital  × 6.0% = 1.500
+                                                ──────
+  Weighted Rate = 2.250 / 50 = 4.50% blended APR
 ```
 
-Each lender receives their own isolated Check. No commingling, no shared pool risk. The conservative lender's 3% return is unaffected by whether the aggressive lender's 8% position performs.
-
-### Blackholed Vault — Immutable Collateral Custody
+### Blackholed Vault — Immutable LP Token Custody
 
 ```mermaid
 graph TD
     subgraph CREATION["Vault Creation (Mutable Phase)"]
-        F[Fund Fresh Account] --> TL[Set Trustlines]
-        TL --> DC[Deposit Collateral<br/><b>90 XRP</b>]
+        F[Fund Fresh Account] --> TL[Set LP Token + dCREDIT Trustlines]
+        TL --> DC[Deposit LP Tokens<br/><b>All overlender LP tokens</b>]
         DC --> DA[Enable DepositAuth]
-        DA --> DP1[DepositPreauth Borrower]
-        DP1 --> DP2[DepositPreauth Liquidation Engine]
-        DP2 --> E1[EscrowCreate: Hash-Locked<br/><b>54 XRP</b> — 60% collateral<br/><i>PREIMAGE-SHA-256 + time-lock</i>]
-        E1 --> E2[EscrowCreate: Liquidation Trigger<br/><b>5 XRP</b> — time-lock only]
-        E2 --> OF[OfferCreate: Standing DEX Offer<br/><b>19 XRP</b> for dCREDIT]
+        DA --> DP[DepositPreauth Originator]
+        DP --> E1[EscrowCreate: Liquidation Trigger<br/><b>5 XRP</b> — time-lock only]
+        E1 --> OF[OfferCreate: Standing DEX Offer<br/><b>LP tokens for dCREDIT</b>]
     end
 
     subgraph BLACKHOLE["Blackholing (Irreversible)"]
@@ -157,10 +121,9 @@ graph TD
     end
 
     subgraph IMMUTABLE["Post-Blackhole State (Consensus-Enforced)"]
-        DM --> IM1["Hash-Locked Escrow<br/><i>Only released with SHA-256 preimage</i>"]
-        DM --> IM2["Liquidation Trigger Escrow<br/><i>Only finishable after time-lock</i>"]
-        DM --> IM3["Standing DEX Offer<br/><i>Only crossable with dCREDIT</i>"]
-        DM --> IM4["❌ No new transactions possible<br/><i>Keys are destroyed</i>"]
+        DM --> IM1["Liquidation Trigger Escrow<br/><i>Only finishable after time-lock</i>"]
+        DM --> IM2["Standing DEX Offer<br/><i>Only crossable with dCREDIT (by Originator)</i>"]
+        DM --> IM3["No new transactions possible<br/><i>Keys are destroyed</i>"]
     end
 
     style CREATION fill:#16213e,stroke:#0f3460,color:#fff
@@ -168,60 +131,110 @@ graph TD
     style IMMUTABLE fill:#0f3460,stroke:#533483,color:#fff
 ```
 
-After blackholing, no human, key, or protocol upgrade can alter the vault. The pre-programmed escrows and offers execute according to their conditions — enforced by XRPL consensus, not by trust.
+After blackholing, no human, key, or protocol upgrade can alter the vault. The pre-programmed escrow and offer execute according to their conditions — enforced by XRPL consensus, not by trust.
 
-### Dual-Enforcement Collateral Release
-
-Collateral return requires two independent verifications:
-
-1. **Application layer**: Borrower's `dCREDIT` balance must equal zero (all debt tokens returned to protocol issuer, verifiable via `account_lines`)
-2. **Consensus layer**: Borrower must reveal the SHA-256 preimage that satisfies the escrow's cryptographic condition (`EscrowFinish` with `Fulfillment`)
-
-The preimage is only revealed after on-chain debt clearance is confirmed. Neither condition alone is sufficient.
-
-### Liquidation: Graceful Degradation
+### Repayment: Forced RLUSD Collection + LP Token Return
 
 ```mermaid
 sequenceDiagram
-    participant OR as Oracle
-    participant L1 as Conservative<br/>Lender
-    participant L2 as Balanced<br/>Lender
-    participant L3 as Aggressive<br/>Lender
-    participant LE as Liquidation<br/>Engine
+    participant B as Borrower
+    participant OL1 as Overlender 1
+    participant OL2 as Overlender 2
+    participant UL1 as Underlender 1
+    participant PI as Originator<br/>(Protocol Issuer)
     participant V as Blackholed<br/>Vault
-    participant TR as Treasury
 
-    Note over OR: XRP/USD crashes<br/>$2.50 → $1.00
+    Note over B,PI: STEP 1: Return dCREDIT
+    B->>PI: Return 50 dCREDIT (debt cleared)
 
-    Note over L1,L3: STEP 1: Attempt Check Collection
+    Note over OL1,UL1: STEP 2: Forced RLUSD Check Collection
+    OL1->>OL1: CheckCash RLUSD (interest)
+    OL2->>OL2: CheckCash RLUSD (interest)
+    UL1->>UL1: CheckCash RLUSD (principal + interest)
 
-    L1->>L1: CheckCash 13.86 XRP ✓ SUCCESS
-    L2->>L2: CheckCash 20.78 XRP ✗ tecPATH_PARTIAL
-    L3->>L3: CheckCash 10.39 XRP ✗ tecPATH_PARTIAL
+    Note over PI,V: STEP 3: LP Token Return
+    PI->>V: OfferCreate dCREDIT (crosses vault standing offer)
+    V-->>PI: LP tokens released
+    PI->>OL1: Return LP tokens
+    PI->>OL2: Return LP tokens
 
-    Note over L1,L3: Recovery: 30.8% (13.86 / 45.03 XRP)<br/>Shortfall: 31.17 XRP
-
-    Note over LE,V: STEP 2: Collateral Seizure
-
-    LE->>V: EscrowFinish (liquidation trigger)
-    LE->>V: Cross standing DEX offer<br/>(seize collateral with dCREDIT)
-
-    Note over LE,TR: STEP 3: Distribute Recovery
-
-    LE->>L2: 72.00 XRP (proportional share)
-    LE->>L3: 36.00 XRP (proportional share)
-    LE->>TR: 2.00 XRP (liquidation bonus)
-
-    Note over L1,TR: All lenders made whole.<br/>Credit score: 700 → 600 (Clawback)
+    Note over B: STEP 4: +50 dSCORE bonus
 ```
 
-When CheckCash fails (`tecPATH_PARTIAL` — borrower drained account), the protocol doesn't stop. It:
+### Liquidation: Default Recovery via AMM
 
-1. Records which Checks succeeded and which failed
-2. Calculates the shortfall
-3. Seizes collateral from the blackholed vault via the standing DEX offer
-4. Distributes recovered XRP proportionally to underpaid lenders
-5. Penalizes the borrower's credit score via `Clawback` (-100 dSCORE)
+```mermaid
+sequenceDiagram
+    participant OL1 as Overlender 1
+    participant OL2 as Overlender 2
+    participant UL1 as Underlender 1
+    participant PI as Originator<br/>(Protocol Issuer)
+    participant V as Blackholed<br/>Vault
+    participant AMM as XRP/RLUSD<br/>AMM
+
+    Note over OL1,UL1: STEP 1: Borrower drains RLUSD (default)
+
+    Note over OL1,UL1: STEP 2: Attempt Check Collection
+    OL1->>OL1: CheckCash RLUSD — BOUNCED
+    OL2->>OL2: CheckCash RLUSD — BOUNCED
+    UL1->>UL1: CheckCash RLUSD — BOUNCED
+
+    Note over PI,V: STEP 3: Collateral Seizure
+    PI->>V: EscrowFinish (liquidation trigger)
+    PI->>V: OfferCreate dCREDIT (crosses vault offer)
+    V-->>PI: LP tokens seized
+
+    Note over PI,AMM: STEP 4: AMMWithdraw 1-sided
+    PI->>AMM: AMMWithdraw (LP tokens → RLUSD)
+    AMM-->>PI: RLUSD recovered
+
+    Note over PI,UL1: STEP 5: Payment Waterfall (80/20)
+    PI->>OL1: RLUSD (overlender paid FIRST)
+    PI->>OL2: RLUSD (overlender paid FIRST)
+    PI->>UL1: RLUSD (interest only, absorbs 80% loss)
+
+    Note over PI: Surplus retained by Originator
+    Note over PI: -100 dSCORE penalty (Clawback)
+```
+
+### Payment Waterfall (Default Split)
+
+```
+                    ┌─────────────────────────┐
+                    │   RLUSD Recovered (AMM)  │
+                    └────────────┬────────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │   Tier 1: OVERLENDER    │
+                    │   Paid FIRST            │
+                    │   Absorbs 20% of loss   │
+                    └────────────┬────────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │   Tier 2: UNDERLENDER   │
+                    │   Interest only          │
+                    │   Absorbs 80% of loss   │
+                    └────────────┬────────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │   Tier 3: SURPLUS       │
+                    │   Retained by Originator │
+                    └─────────────────────────┘
+```
+
+---
+
+## Account Architecture
+
+| Account | Role | Count |
+|---------|------|-------|
+| **Protocol Issuer** | Originator — issues dCREDIT/dRECEIPT/dSCORE, crosses vault offers, distributes LP tokens, handles waterfall | 1 |
+| **RLUSD Issuer** | Stablecoin issuer (separate from protocol) | 1 |
+| **AMM Bootstrapper** | Seeds the initial XRP/RLUSD AMM pool | 1 |
+| **Overlender 1 & 2** | Deposit into AMM, receive LP tokens as collateral | 2 |
+| **Underlender 1** | Provides direct RLUSD capital | 1 |
+| **Borrower** | Receives RLUSD loan, signs RLUSD Checks | 1 |
+| | **Total** | **7** |
 
 ---
 
@@ -229,11 +242,11 @@ When CheckCash fails (`tecPATH_PARTIAL` — borrower drained account), the proto
 
 | Token | Encoding | Purpose |
 |-------|----------|---------|
-| **dCREDIT** | `6443524544495400000000000000000000000000` | Debt obligation. Issued at origination, returned at repayment. Non-zero balance = outstanding debt. |
-| **dRECEIPT** | `6452454345495054000000000000000000000000` | Lender deposit receipt. 1:1 for each XRP committed. Proves lending position. |
+| **dCREDIT** | `6443524544495400000000000000000000000000` | Debt obligation. Issued at origination, returned at repayment. Also used as vault crossing key. |
+| **dRECEIPT** | `6452454345495054000000000000000000000000` | Lender deposit receipt. Proves lending position. |
 | **dSCORE** | `6453434F52450000000000000000000000000000` | On-chain credit score. Starts at 700. +50 on-time repay. -100 (Clawback) on liquidation. |
 
-All tokens are issued by the Protocol Issuer with `asfAllowTrustLineClawback` enabled, allowing the protocol to enforce credit penalties.
+All tokens are issued by the Protocol Issuer with `asfAllowTrustLineClawback` enabled.
 
 ---
 
@@ -242,35 +255,29 @@ All tokens are issued by the Protocol Issuer with `asfAllowTrustLineClawback` en
 ```mermaid
 graph LR
     subgraph INIT["1. Initialize"]
-        I1[Fund 8 Accounts] --> I2[Configure Issuer<br/><i>Clawback + DefaultRipple</i>]
-        I2 --> I3[Establish 10 Trustlines]
-        I3 --> I4[Access Control<br/><i>DepositAuth + Preauth</i>]
-        I4 --> I5[Oracle Feeds]
+        I1[Fund 7 Accounts] --> I2[Configure Issuers<br/><i>Clawback + DefaultRipple</i>]
+        I2 --> I3[Establish Trustlines]
+        I3 --> I4[Create AMM Pool]
+        I4 --> I5[Overlender LP Deposits]
     end
 
-    subgraph DEPOSIT["2. Lender Deposits"]
-        D1[Issue dRECEIPT] --> D2[Mint Position NFT]
-        D2 --> D3[Transfer NFT to Lender]
-    end
-
-    subgraph BORROW["3. Borrow"]
-        B1[Credit Assessment<br/><i>dSCORE check</i>] --> B2[Pool Matching<br/><i>Pro-rata allocation</i>]
-        B2 --> B3[Create & Blackhole Vault<br/><i>Escrows + DEX offer</i>]
-        B3 --> B4[Direct Lending<br/><i>Lender → Borrower</i>]
-        B4 --> B5[CheckCreate × 3<br/><i>Forced repayment setup</i>]
+    subgraph BORROW["2. Borrow"]
+        B1[Credit Assessment<br/><i>dSCORE check</i>] --> B2[Pool Matching<br/><i>Overlender/Underlender split</i>]
+        B2 --> B3[Create & Blackhole Vault<br/><i>LP tokens + standing offer</i>]
+        B3 --> B4[RLUSD Lending<br/><i>Underlender → Borrower</i>]
+        B4 --> B5[CheckCreate RLUSD<br/><i>Forced repayment setup</i>]
         B5 --> B6[Issue dCREDIT<br/><i>Debt token</i>]
     end
 
-    subgraph RESOLVE["4. Resolution"]
+    subgraph RESOLVE["3. Resolution"]
         R1{Borrower<br/>Repays?}
-        R1 -->|Yes| R2[Return dCREDIT<br/>Lenders CheckCash<br/>Release Collateral<br/><b>+50 dSCORE</b>]
-        R1 -->|No| R3[Attempt CheckCash<br/>Seize Collateral<br/>Distribute Recovery<br/><b>-100 dSCORE</b>]
+        R1 -->|Yes| R2[Return dCREDIT<br/>Lenders CheckCash RLUSD<br/>Originator returns LP tokens<br/><b>+50 dSCORE</b>]
+        R1 -->|No| R3[CheckCash fails<br/>Originator seizes LP tokens<br/>AMMWithdraw → RLUSD<br/>80/20 waterfall<br/><b>-100 dSCORE</b>]
     end
 
-    INIT --> DEPOSIT --> BORROW --> RESOLVE
+    INIT --> BORROW --> RESOLVE
 
     style INIT fill:#16213e,stroke:#0f3460,color:#fff
-    style DEPOSIT fill:#1a1a2e,stroke:#e94560,color:#fff
     style BORROW fill:#0f3460,stroke:#533483,color:#fff
     style RESOLVE fill:#533483,stroke:#e94560,color:#fff
 ```
@@ -283,17 +290,16 @@ Every operation uses native XRPL transaction types. No smart contracts, no VM, n
 
 | Primitive | Protocol Usage |
 |-----------|---------------|
-| `CheckCreate` / `CheckCash` | Forced repayment — lenders pull without borrower |
-| `EscrowCreate` + `PREIMAGE-SHA-256` | Hash-locked collateral return |
+| `CheckCreate` / `CheckCash` | Forced repayment — lenders pull RLUSD without borrower |
 | `EscrowCreate` (time-locked) | Liquidation trigger mechanism |
-| `EscrowFinish` + `Fulfillment` | Collateral release with preimage reveal |
+| `EscrowFinish` | Liquidation trigger release |
 | `SetRegularKey` + `DisableMasterKey` | Permanent vault blackholing |
-| `OfferCreate` | Standing liquidation DEX offer |
+| `OfferCreate` | Standing vault offer (LP tokens for dCREDIT) |
+| `AMMCreate` / `AMMDeposit` / `AMMWithdraw` | LP token pool management |
 | `Clawback` | Credit score penalty enforcement |
-| `DepositPreauth` | Access control on Treasury and vault |
+| `DepositPreauth` | Access control on vault |
 | `NFTokenMint` / `NFTokenAcceptOffer` | Position records (Loan, Repayment, Liquidation) |
-| `TrustSet` + `Payment` (tokens) | dCREDIT, dRECEIPT, dSCORE issuance |
-| `OracleSet` | Price and utilization feeds |
+| `TrustSet` + `Payment` (tokens) | dCREDIT, dRECEIPT, dSCORE, RLUSD issuance |
 
 ---
 
@@ -313,21 +319,11 @@ npm install
 ### Demo Modes
 
 ```bash
-# Happy path: borrow → forced repayment → collateral release
-node src/demo.js repay
+# Happy path: borrow → forced RLUSD repayment → LP token return
+npm run demo:repay
 
-# Default path: borrow → drain → partial check recovery → collateral seizure
-node src/demo.js liquidate
-```
-
-### Step-by-Step Execution
-
-```bash
-node src/index.js init        # Fund accounts, configure trustlines
-node src/index.js deposit     # Register 3 lenders across tiers
-node src/index.js borrow      # Originate 45 XRP loan
-node src/index.js repay       # Force-collect via Checks + release collateral
-node src/index.js liquidate   # Attempt Checks + seize collateral
+# Default path: borrow → drain → RLUSD Checks bounce → LP seizure → AMM withdrawal → 80/20 waterfall
+npm run demo:liquidate
 ```
 
 ---
@@ -337,18 +333,18 @@ node src/index.js liquidate   # Attempt Checks + seize collateral
 ```
 ├── package.json
 ├── src/
-│   ├── config.js              # Constants, currency codes, pool tiers
+│   ├── config.js              # Constants, currency codes, AMM config, 7 accounts
 │   ├── utils/
 │   │   ├── tx.js              # submitTx(), ledger time, wait utilities
 │   │   ├── state.js           # Balance queries, Check/NFT/Escrow lookups
 │   │   ├── crypto.js          # PREIMAGE-SHA-256 condition generation
-│   │   └── pools.js           # Pro-rata allocation, weighted average
+│   │   ├── amm.js             # AMM create, deposit, withdraw, LP balance
+│   │   └── pools.js           # Overlender/underlender allocation
 │   ├── flows/
-│   │   ├── initialize.js      # Fund 8 accounts, trustlines, access control
-│   │   ├── deposit.js         # Register lenders, issue dRECEIPT + NFTs
-│   │   ├── borrow.js          # Pool matching, vault, direct lending, Checks
-│   │   ├── repay.js           # dCREDIT return, forced Check collection, escrow release
-│   │   ├── liquidate.js       # Check attempts, collateral seizure, distribution
+│   │   ├── initialize.js      # Fund 7 accounts, trustlines, AMM, LP deposits
+│   │   ├── borrow.js          # Pool matching, vault, RLUSD lending, Checks
+│   │   ├── repay.js           # dCREDIT return, forced Check collection, LP return
+│   │   ├── liquidate.js       # Check attempts, LP seizure, AMMWithdraw, waterfall
 │   │   └── summary.js         # Final protocol state display
 │   ├── index.js               # Step-by-step CLI runner
 │   └── demo.js                # Full lifecycle: repay or liquidate mode
@@ -361,14 +357,15 @@ node src/index.js liquidate   # Attempt Checks + seize collateral
 Both lifecycle modes verified on XRPL Testnet (`wss://s.altnet.rippletest.net:51233`):
 
 **Repay Mode:**
-- 3/3 CheckCash: `tesSUCCESS` (45.03 XRP collected, zero borrower cooperation)
-- EscrowFinish with SHA-256 fulfillment: `tesSUCCESS` (54 XRP collateral released)
+- All CheckCash: `tesSUCCESS` (RLUSD collected, zero borrower cooperation)
+- LP tokens returned via vault standing offer crossing: `tesSUCCESS`
 - Credit score: 700 → 750
 
 **Liquidation Mode:**
-- 1/3 CheckCash: `tesSUCCESS` (13.86 XRP), 2/3: `tecPATH_PARTIAL` (borrower drained)
-- Collateral seized via DEX offer crossing: `tesSUCCESS`
-- Recovered XRP distributed to unpaid lenders: `tesSUCCESS`
+- All CheckCash: `tecPATH_PARTIAL` (borrower drained RLUSD)
+- LP tokens seized via standing offer: `tesSUCCESS`
+- AMMWithdraw 1-sided: `tesSUCCESS` (LP tokens → RLUSD)
+- Waterfall distribution: `tesSUCCESS` (overlender first, then underlender)
 - Clawback 100 dSCORE: `tesSUCCESS` (700 → 600)
 
 ---

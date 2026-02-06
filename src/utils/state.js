@@ -80,6 +80,14 @@ async function getAccountEscrows(client, address) {
   return getAccountObjects(client, address, 'escrow')
 }
 
+async function getRLUSDBalance(client, address, rlusdCurrencyHex, rlusdIssuerAddress) {
+  return getTokenBalance(client, address, rlusdCurrencyHex, rlusdIssuerAddress)
+}
+
+async function getLPTokenBalance(client, address, lpTokenCurrency, lpTokenIssuer) {
+  return getTokenBalance(client, address, lpTokenCurrency, lpTokenIssuer)
+}
+
 module.exports = {
   getXRPBalance,
   getTrustLines,
@@ -88,4 +96,6 @@ module.exports = {
   getTokenBalance,
   getNFTs,
   getAccountEscrows,
+  getRLUSDBalance,
+  getLPTokenBalance,
 }
